@@ -1,0 +1,5 @@
+catboost==1.2.5
+joblib==1.2.0
+pandas==1.5.3
+SQLAlchemy==2.0.25
+streamlit==1.30.0
