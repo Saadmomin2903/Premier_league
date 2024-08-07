@@ -1,19 +1,15 @@
 import streamlit as st
 import pandas as pd
-from sqlalchemy import create_engine
+import psycopg2
+from psycopg2 import sql
 from joblib import load
 import catboost
-import psycopg2
-
 
 # Load the pipeline
-pipe = load('pipe.joblib')
-
-# Your NeonDB URL
-db_url = "postgresql://neondb_owner:Qx9nHGmey4fX@ep-muddy-hill-a1wfdgdb.ap-southeast-1.aws.neon.tech/neondb?sslmode=require"
-
-# Create an engine to connect to the PostgreSQL database
-engine = create_engine(db_url)
+try:
+    pipe = load('pipe.joblib')
+except Exception as e:
+    st.error(f"Error loading model: {str(e)}")
 
 # Set up the Streamlit page
 page_by_img = '''
@@ -25,7 +21,7 @@ body {
 </style>
 '''
 st.markdown(page_by_img, unsafe_allow_html=True)
-st.title("Premire League PREDICTOR")
+st.title("Premier League PREDICTOR")
 
 # Define teams
 H_team = sorted([
@@ -54,16 +50,36 @@ with col1:
 with col2:
     AwayTeam = st.selectbox("Select Away Team", A_team)
 
+# Database connection parameters
+db_params = {
+    "dbname": "neondb",
+    "user": "neondb_owner",
+    "password": "Qx9nHGmey4fX",
+    "host": "ep-muddy-hill-a1wfdgdb.ap-southeast-1.aws.neon.tech",
+    "port": "5432",
+    "sslmode": "require"
+}
+
 # Load data from the database
-query = """
-SELECT "GF", "GA", "home_team", "Opponent", "Result", "Date"
-FROM preprocessed_stats
-"""
-
-df = pd.read_sql(query, engine)
-
-df = pd.read_sql(query, engine)
-df['Date'] = pd.to_datetime(df['Date'])
+try:
+    conn = psycopg2.connect(**db_params)
+    cur = conn.cursor()
+    
+    query = """
+    SELECT "GF", "GA", "home_team", "Opponent", "Result", "Date"
+    FROM preprocessed_stats
+    """
+    cur.execute(query)
+    results = cur.fetchall()
+    
+    df = pd.DataFrame(results, columns=["GF", "GA", "home_team", "Opponent", "Result", "Date"])
+    df['Date'] = pd.to_datetime(df['Date'])
+    
+    cur.close()
+    conn.close()
+except Exception as e:
+    st.error(f"Database error: {str(e)}")
+    st.stop()
 
 # Process data
 df = df.sort_values(by=['home_team', 'Date'])
@@ -89,7 +105,6 @@ def get_statistic_for_team(team_name, stat_name):
         st.error(f"Statistic '{stat_name}' is not a valid column in the DataFrame.")
         return None
 
-    # Filter the DataFrame for the specific team and get the latest statistic
     if stat_name in ['Rolling_GF_Home', 'Rolling_GA_Home', 'Home_Wins_Form', 'Home_Draws_Form', 'Home_Losses_Form']:
         team_stats = df[df['home_team'] == team_name]
     else:
@@ -100,8 +115,8 @@ def get_statistic_for_team(team_name, stat_name):
 
 if st.button('Predict Probability'):
     final = pd.DataFrame({
-        "home_team": [HomeTeam],  # Changed from "HomeTeam"
-        "Opponent": [AwayTeam],   # Changed from "AwayTeam"
+        "home_team": [HomeTeam],
+        "Opponent": [AwayTeam],
         "Rolling_GF_Home": [get_statistic_for_team(HomeTeam, "Rolling_GF_Home")],
         "Rolling_GA_Home": [get_statistic_for_team(HomeTeam, "Rolling_GA_Home")],
         "Rolling_GF_Away": [get_statistic_for_team(AwayTeam, "Rolling_GF_Away")],
@@ -117,11 +132,23 @@ if st.button('Predict Probability'):
     if final.isnull().values.any():
         st.error("Error: Some statistics are missing for the selected teams.")
     else:
-        result = pipe.predict_proba(final)
-        home_win_proba = result[0, 2]  # Probability of Home Win (1)
-        draw_proba = result[0, 1]  # Probability of Draw (0)
-        away_win_proba = result[0, 0]  # Probability of Away Win (-1)
+        try:
+            result = pipe.predict_proba(final)
+            home_win_proba = result[0, 2]  # Probability of Home Win (1)
+            draw_proba = result[0, 1]  # Probability of Draw (0)
+            away_win_proba = result[0, 0]  # Probability of Away Win (-1)
 
-        st.text(f"{HomeTeam} Win Probability: {round(home_win_proba * 100)}%")
-        st.text(f"Draw Probability: {round(draw_proba * 100)}%")
-        st.text(f"{AwayTeam} Win Probability: {round(away_win_proba * 100)}%")
+            st.text(f"{HomeTeam} Win Probability: {round(home_win_proba * 100)}%")
+            st.text(f"Draw Probability: {round(draw_proba * 100)}%")
+            st.text(f"{AwayTeam} Win Probability: {round(away_win_proba * 100)}%")
+        except Exception as e:
+            st.error(f"Prediction error: {str(e)}")
+
+# Display version information
+import pandas as pd
+import sqlalchemy
+import psycopg2
+
+st.write(f"pandas version: {pd.__version__}")
+st.write(f"SQLAlchemy version: {sqlalchemy.__version__}")
+st.write(f"psycopg2 version: {psycopg2.__version__}")
