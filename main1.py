@@ -144,11 +144,3 @@ if st.button('Predict Probability'):
         except Exception as e:
             st.error(f"Prediction error: {str(e)}")
 
-# Display version information
-import pandas as pd
-import sqlalchemy
-import psycopg2
-
-st.write(f"pandas version: {pd.__version__}")
-st.write(f"SQLAlchemy version: {sqlalchemy.__version__}")
-st.write(f"psycopg2 version: {psycopg2.__version__}")
