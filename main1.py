@@ -3,6 +3,7 @@ import pandas as pd
 from sqlalchemy import create_engine
 from joblib import load
 import catboost
+import psycopg2
 
 
 # Load the pipeline
