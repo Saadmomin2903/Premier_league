@@ -4,7 +4,12 @@ import psycopg2
 from psycopg2 import sql
 from joblib import load
 import catboost
-
+try:
+    from joblib import load
+except ModuleNotFoundError:
+    st.error("ModuleNotFoundError: No module named 'distutils'. Please make sure setuptools is installed.")
+    st.stop()
+    
 # Load the pipeline
 try:
     pipe = load('pipe.joblib')
