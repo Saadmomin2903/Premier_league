@@ -4,4 +4,5 @@ catboost==1.2.5
 joblib==1.2.0
 streamlit==1.30.0
 SQLAlchemy==2.0.25
-psycopg2==2.9.9
+psycopg2-binary==2.9.9
+
