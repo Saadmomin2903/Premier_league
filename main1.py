@@ -7,6 +7,9 @@ import catboost
 from typing import Dict, Any
 import logging
 
+# Set up the Streamlit page configuration
+st.set_page_config(page_title="Premier League PREDICTOR", page_icon="⚽")
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -32,50 +35,6 @@ def load_model(model_path: str):
         logger.error(f"Error loading model: {str(e)}")
         st.error(f"Error loading model: {str(e)}")
         return None
-
-pipe = load_model(MODEL_PATH)
-
-# Set up the Streamlit page
-st.set_page_config(page_title="Premier League PREDICTOR", page_icon="⚽")
-st.markdown(
-    """
-    <style>
-    body {
-        background-image: url("https://wallpapercave.com/wp/wp4059913.jpg");
-        background-size: cover;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-st.title("Premier League PREDICTOR")
-
-# Define teams
-H_team = sorted([
-    'Fulham', 'West Ham United', 'Aston Villa', 'Liverpool', 'Everton',
-    'Manchester United', 'Southampton', 'Crystal Palace', 'Chelsea',
-    'Newcastle United', 'Tottenham', 'Manchester City', 'Arsenal',
-    'Leicester City', 'Bournemouth', 'Brighton',
-    'Wolverhampton Wanderers', 'Leeds United', 'Brentford',
-    'Nottingham Forest'
-])
-A_team = sorted([
-    'Sunderland', 'Cardiff City', 'Arsenal', 'Stoke City',
-    'Norwich City', 'Swansea City', 'West Brom', 'Tottenham',
-    'Hull City', 'Manchester City', 'Chelsea', 'Aston Villa',
-    'Newcastle Utd', 'Manchester Utd', 'Liverpool', 'Crystal Palace',
-    'Everton', 'Southampton', 'West Ham', 'Fulham', 'Leicester City',
-    'Burnley', 'Other', 'Bournemouth', 'Watford', 'Brighton',
-    'Huddersfield', 'Wolves', 'Sheffield Utd', 'Leeds United',
-    'Brentford'
-])
-
-# User inputs for team selection
-col1, col2 = st.columns(2)
-with col1:
-    HomeTeam = st.selectbox("Select Home Team", H_team)
-with col2:
-    AwayTeam = st.selectbox("Select Away Team", A_team)
 
 # Database functions
 def connect_to_db(params: Dict[str, Any]):
@@ -154,24 +113,77 @@ def predict_match(pipe, home_team: str, away_team: str, df: pd.DataFrame) -> Dic
         logger.error(f"Prediction error: {str(e)}")
         return {}
 
-# Main execution
-if st.button('Predict Probability'):
-    with st.spinner('Fetching and processing data...'):
-        conn = connect_to_db(DB_PARAMS)
-        if conn:
-            df = fetch_data_from_db(conn)
-            conn.close()
-            if not df.empty:
-                df = process_data(df)
-                probabilities = predict_match(pipe, HomeTeam, AwayTeam, df)
-                if probabilities:
-                    st.success("Prediction successful!")
-                    st.text(f"{HomeTeam} Win Probability: {round(probabilities['home_win'] * 100)}%")
-                    st.text(f"Draw Probability: {round(probabilities['draw'] * 100)}%")
-                    st.text(f"{AwayTeam} Win Probability: {round(probabilities['away_win'] * 100)}%")
+# Main function
+def main():
+    st.title("Premier League PREDICTOR")
+
+    # Set background image
+    st.markdown(
+        """
+        <style>
+        body {
+            background-image: url("https://wallpapercave.com/wp/wp4059913.jpg");
+            background-size: cover;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # Load model
+    pipe = load_model(MODEL_PATH)
+    if pipe is None:
+        st.error("Failed to load the model. Please try again later.")
+        return
+
+    # Define teams
+    H_team = sorted([
+        'Fulham', 'West Ham United', 'Aston Villa', 'Liverpool', 'Everton',
+        'Manchester United', 'Southampton', 'Crystal Palace', 'Chelsea',
+        'Newcastle United', 'Tottenham', 'Manchester City', 'Arsenal',
+        'Leicester City', 'Bournemouth', 'Brighton',
+        'Wolverhampton Wanderers', 'Leeds United', 'Brentford',
+        'Nottingham Forest'
+    ])
+    A_team = sorted([
+        'Sunderland', 'Cardiff City', 'Arsenal', 'Stoke City',
+        'Norwich City', 'Swansea City', 'West Brom', 'Tottenham',
+        'Hull City', 'Manchester City', 'Chelsea', 'Aston Villa',
+        'Newcastle Utd', 'Manchester Utd', 'Liverpool', 'Crystal Palace',
+        'Everton', 'Southampton', 'West Ham', 'Fulham', 'Leicester City',
+        'Burnley', 'Other', 'Bournemouth', 'Watford', 'Brighton',
+        'Huddersfield', 'Wolves', 'Sheffield Utd', 'Leeds United',
+        'Brentford'
+    ])
+
+    # User inputs for team selection
+    col1, col2 = st.columns(2)
+    with col1:
+        HomeTeam = st.selectbox("Select Home Team", H_team)
+    with col2:
+        AwayTeam = st.selectbox("Select Away Team", A_team)
+
+    # Prediction button
+    if st.button('Predict Probability'):
+        with st.spinner('Fetching and processing data...'):
+            conn = connect_to_db(DB_PARAMS)
+            if conn:
+                df = fetch_data_from_db(conn)
+                conn.close()
+                if not df.empty:
+                    df = process_data(df)
+                    probabilities = predict_match(pipe, HomeTeam, AwayTeam, df)
+                    if probabilities:
+                        st.success("Prediction successful!")
+                        st.text(f"{HomeTeam} Win Probability: {round(probabilities['home_win'] * 100)}%")
+                        st.text(f"Draw Probability: {round(probabilities['draw'] * 100)}%")
+                        st.text(f"{AwayTeam} Win Probability: {round(probabilities['away_win'] * 100)}%")
+                    else:
+                        st.error("Unable to make prediction. Please try again.")
                 else:
-                    st.error("Unable to make prediction. Please try again.")
+                    st.error("No data available for prediction.")
             else:
-                st.error("No data available for prediction.")
-        else:
-            st.error("Unable to connect to the database. Please try again later.")
+                st.error("Unable to connect to the database. Please try again later.")
+
+if __name__ == "__main__":
+    main()
