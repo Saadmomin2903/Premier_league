@@ -4,28 +4,50 @@ import psycopg2
 from psycopg2 import sql
 from joblib import load
 import catboost
-try:
-    from joblib import load
-except ModuleNotFoundError:
-    st.error("ModuleNotFoundError: No module named 'distutils'. Please make sure setuptools is installed.")
-    st.stop()
-    
+from typing import Dict, Any
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Constants
+MODEL_PATH = 'pipe.joblib'
+DB_PARAMS = {
+    "dbname": "neondb",
+    "user": "neondb_owner",
+    "password": "Qx9nHGmey4fX",
+    "host": "ep-muddy-hill-a1wfdgdb.ap-southeast-1.aws.neon.tech",
+    "port": "5432",
+    "sslmode": "require"
+}
+WINDOW_SIZE = 5
+
 # Load the pipeline
-try:
-    pipe = load('pipe.joblib')
-except Exception as e:
-    st.error(f"Error loading model: {str(e)}")
+@st.cache_resource
+def load_model(model_path: str):
+    try:
+        return load(model_path)
+    except Exception as e:
+        logger.error(f"Error loading model: {str(e)}")
+        st.error(f"Error loading model: {str(e)}")
+        return None
+
+pipe = load_model(MODEL_PATH)
 
 # Set up the Streamlit page
-page_by_img = '''
-<style>
-body {
-    background-image: url("https://wallpapercave.com/wp/wp4059913.jpg");
-    background-size: cover;
-}
-</style>
-'''
-st.markdown(page_by_img, unsafe_allow_html=True)
+st.set_page_config(page_title="Premier League PREDICTOR", page_icon="⚽")
+st.markdown(
+    """
+    <style>
+    body {
+        background-image: url("https://wallpapercave.com/wp/wp4059913.jpg");
+        background-size: cover;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 st.title("Premier League PREDICTOR")
 
 # Define teams
@@ -55,97 +77,101 @@ with col1:
 with col2:
     AwayTeam = st.selectbox("Select Away Team", A_team)
 
-# Database connection parameters
-db_params = {
-    "dbname": "neondb",
-    "user": "neondb_owner",
-    "password": "Qx9nHGmey4fX",
-    "host": "ep-muddy-hill-a1wfdgdb.ap-southeast-1.aws.neon.tech",
-    "port": "5432",
-    "sslmode": "require"
-}
+# Database functions
+def connect_to_db(params: Dict[str, Any]):
+    try:
+        return psycopg2.connect(**params)
+    except Exception as e:
+        logger.error(f"Database connection error: {str(e)}")
+        st.error(f"Database connection error: {str(e)}")
+        return None
 
-# Load data from the database
-try:
-    conn = psycopg2.connect(**db_params)
-    cur = conn.cursor()
-    
+def fetch_data_from_db(conn) -> pd.DataFrame:
     query = """
     SELECT "GF", "GA", "home_team", "Opponent", "Result", "Date"
     FROM preprocessed_stats
     """
-    cur.execute(query)
-    results = cur.fetchall()
-    
-    df = pd.DataFrame(results, columns=["GF", "GA", "home_team", "Opponent", "Result", "Date"])
+    try:
+        return pd.read_sql_query(query, conn)
+    except Exception as e:
+        logger.error(f"Error fetching data: {str(e)}")
+        st.error(f"Error fetching data: {str(e)}")
+        return pd.DataFrame()
+
+# Data processing functions
+def process_data(df: pd.DataFrame) -> pd.DataFrame:
     df['Date'] = pd.to_datetime(df['Date'])
+    df = df.sort_values(by=['home_team', 'Date'])
     
-    cur.close()
-    conn.close()
-except Exception as e:
-    st.error(f"Database error: {str(e)}")
-    st.stop()
+    for stat in ['GF', 'GA']:
+        df[f'Rolling_{stat}_Home'] = df.groupby('home_team')[stat].transform(lambda x: x.rolling(window=WINDOW_SIZE, min_periods=1).mean())
+        df[f'Rolling_{stat}_Away'] = df.groupby('Opponent')[stat].transform(lambda x: x.rolling(window=WINDOW_SIZE, min_periods=1).mean())
+    
+    for result, column in zip([1, 0, -1], ['Wins', 'Draws', 'Losses']):
+        df[f'Home_{column}_Form'] = df.groupby('home_team')['Result'].transform(lambda x: calculate_form(x, result))
+        df[f'Away_{column}_Form'] = df.groupby('Opponent')['Result'].transform(lambda x: calculate_form(x, result))
+    
+    return df
 
-# Process data
-df = df.sort_values(by=['home_team', 'Date'])
-df['Rolling_GF_Home'] = df.groupby('home_team')['GF'].transform(lambda x: x.rolling(window=5, min_periods=1).mean())
-df['Rolling_GA_Home'] = df.groupby('home_team')['GA'].transform(lambda x: x.rolling(window=5, min_periods=1).mean())
-df['Rolling_GF_Away'] = df.groupby('Opponent')['GF'].transform(lambda x: x.rolling(window=5, min_periods=1).mean())
-df['Rolling_GA_Away'] = df.groupby('Opponent')['GA'].transform(lambda x: x.rolling(window=5, min_periods=1).mean())
+def calculate_form(series: pd.Series, result: int) -> pd.Series:
+    return series.rolling(window=WINDOW_SIZE, min_periods=1).apply(lambda x: (x == result).sum(), raw=False)
 
-window_size = 5
-
-def calculate_form(series, result):
-    return series.rolling(window=window_size, min_periods=1).apply(lambda x: (x == result).sum(), raw=False)
-
-df['Home_Wins_Form'] = df.groupby('home_team')['Result'].transform(lambda x: calculate_form(x, 1))
-df['Home_Draws_Form'] = df.groupby('home_team')['Result'].transform(lambda x: calculate_form(x, 0))
-df['Home_Losses_Form'] = df.groupby('home_team')['Result'].transform(lambda x: calculate_form(x, -1))
-df['Away_Wins_Form'] = df.groupby('Opponent')['Result'].transform(lambda x: calculate_form(x, 1))
-df['Away_Draws_Form'] = df.groupby('Opponent')['Result'].transform(lambda x: calculate_form(x, 0))
-df['Away_Losses_Form'] = df.groupby('Opponent')['Result'].transform(lambda x: calculate_form(x, -1))
-
-def get_statistic_for_team(team_name, stat_name):
+def get_statistic_for_team(df: pd.DataFrame, team_name: str, stat_name: str):
     if stat_name not in df.columns:
-        st.error(f"Statistic '{stat_name}' is not a valid column in the DataFrame.")
+        logger.error(f"Statistic '{stat_name}' is not a valid column in the DataFrame.")
         return None
 
-    if stat_name in ['Rolling_GF_Home', 'Rolling_GA_Home', 'Home_Wins_Form', 'Home_Draws_Form', 'Home_Losses_Form']:
-        team_stats = df[df['home_team'] == team_name]
-    else:
-        team_stats = df[df['Opponent'] == team_name]
+    team_column = 'home_team' if 'Home' in stat_name else 'Opponent'
+    team_stats = df[df[team_column] == team_name]
+    return team_stats[stat_name].iloc[-1] if not team_stats.empty else None
 
-    latest_stat = team_stats[stat_name].iloc[-1] if not team_stats.empty else None
-    return latest_stat
-
-if st.button('Predict Probability'):
+# Prediction function
+def predict_match(pipe, home_team: str, away_team: str, df: pd.DataFrame) -> Dict[str, float]:
+    features = [
+        "Rolling_GF_Home", "Rolling_GA_Home", "Rolling_GF_Away", "Rolling_GA_Away",
+        "Home_Wins_Form", "Home_Draws_Form", "Home_Losses_Form",
+        "Away_Wins_Form", "Away_Draws_Form", "Away_Losses_Form"
+    ]
+    
     final = pd.DataFrame({
-        "home_team": [HomeTeam],
-        "Opponent": [AwayTeam],
-        "Rolling_GF_Home": [get_statistic_for_team(HomeTeam, "Rolling_GF_Home")],
-        "Rolling_GA_Home": [get_statistic_for_team(HomeTeam, "Rolling_GA_Home")],
-        "Rolling_GF_Away": [get_statistic_for_team(AwayTeam, "Rolling_GF_Away")],
-        "Rolling_GA_Away": [get_statistic_for_team(AwayTeam, "Rolling_GA_Away")],
-        "Home_Wins_Form": [get_statistic_for_team(HomeTeam, "Home_Wins_Form")],
-        "Home_Draws_Form": [get_statistic_for_team(HomeTeam, "Home_Draws_Form")],
-        "Home_Losses_Form": [get_statistic_for_team(HomeTeam, "Home_Losses_Form")],
-        "Away_Wins_Form": [get_statistic_for_team(AwayTeam, "Away_Wins_Form")],
-        "Away_Draws_Form": [get_statistic_for_team(AwayTeam, "Away_Draws_Form")],
-        "Away_Losses_Form": [get_statistic_for_team(AwayTeam, "Away_Losses_Form")]
+        "home_team": [home_team],
+        "Opponent": [away_team],
+        **{feat: [get_statistic_for_team(df, home_team if 'Home' in feat else away_team, feat)] for feat in features}
     })
 
     if final.isnull().values.any():
-        st.error("Error: Some statistics are missing for the selected teams.")
-    else:
-        try:
-            result = pipe.predict_proba(final)
-            home_win_proba = result[0, 2]  # Probability of Home Win (1)
-            draw_proba = result[0, 1]  # Probability of Draw (0)
-            away_win_proba = result[0, 0]  # Probability of Away Win (-1)
+        logger.error("Error: Some statistics are missing for the selected teams.")
+        return {}
 
-            st.text(f"{HomeTeam} Win Probability: {round(home_win_proba * 100)}%")
-            st.text(f"Draw Probability: {round(draw_proba * 100)}%")
-            st.text(f"{AwayTeam} Win Probability: {round(away_win_proba * 100)}%")
-        except Exception as e:
-            st.error(f"Prediction error: {str(e)}")
+    try:
+        result = pipe.predict_proba(final)
+        return {
+            "home_win": result[0, 2],
+            "draw": result[0, 1],
+            "away_win": result[0, 0]
+        }
+    except Exception as e:
+        logger.error(f"Prediction error: {str(e)}")
+        return {}
 
+# Main execution
+if st.button('Predict Probability'):
+    with st.spinner('Fetching and processing data...'):
+        conn = connect_to_db(DB_PARAMS)
+        if conn:
+            df = fetch_data_from_db(conn)
+            conn.close()
+            if not df.empty:
+                df = process_data(df)
+                probabilities = predict_match(pipe, HomeTeam, AwayTeam, df)
+                if probabilities:
+                    st.success("Prediction successful!")
+                    st.text(f"{HomeTeam} Win Probability: {round(probabilities['home_win'] * 100)}%")
+                    st.text(f"Draw Probability: {round(probabilities['draw'] * 100)}%")
+                    st.text(f"{AwayTeam} Win Probability: {round(probabilities['away_win'] * 100)}%")
+                else:
+                    st.error("Unable to make prediction. Please try again.")
+            else:
+                st.error("No data available for prediction.")
+        else:
+            st.error("Unable to connect to the database. Please try again later.")
